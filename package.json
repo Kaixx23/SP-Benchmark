@@ -1,0 +1,16 @@
+{
+  "name": "airport-bench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Windows/Mac/Linux web app to benchmark and compare multiple VPN airport subscriptions side-by-side using mihomo.",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "setup": "node setup-mihomo.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
