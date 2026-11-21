@@ -249,9 +249,11 @@ export async function benchmarkSupplier(supplier, opts = {}) {
   const payloadMb = Number(opts.payloadMb || 25);
   const maxBytes = mode === "ping" ? 512 * 1024 : payloadMb * 1024 * 1024;
   const speedTimeoutMs = mode === "ping" ? 4500 : (opts.speedTimeoutMs || 8500);
+  const defaultCfUrl = "https://speed.cloudflare.com/__down?bytes=25000000";
+  const resolvedCustomUrl = opts.speedUrl && opts.speedUrl !== defaultCfUrl ? opts.speedUrl : "";
   const speedUrl = mode === "ping"
     ? "https://speed.cloudflare.com/__down?bytes=524288"
-    : (opts.speedUrl || `https://speed.cloudflare.com/__down?bytes=${maxBytes}`);
+    : (resolvedCustomUrl || `https://speed.cloudflare.com/__down?bytes=${maxBytes}`);
   const cnDns = opts.cnDns !== false;
   const onProgress = opts.onProgress || (() => {});
   const signal = opts.signal;
@@ -409,6 +411,34 @@ export async function sendTelegramDigest({ botToken, chatId, runs }) {
     );
   }
   const text = lines.join("\n");
+  const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text }),
+    signal: AbortSignal.timeout(10000),
+  });
+  return { sent: res.ok, status: res.status };
+}
+
+export async function sendTelegramStabilityReport({ botToken, chatId, report }) {
+  if (!botToken || !chatId || !report) return { sent: false, reason: "missing config or report" };
+  const tested = (report.rankings || []).filter((r) => r.runCount > 0);
+  const lines = [
+    `🏆 Daily VPN Stability Report (${report.windowHours > 0 ? `Last ${report.windowHours}h` : "All History"})`,
+    `${report.verdict}`,
+    "",
+  ];
+  tested.forEach((r, idx) => {
+    const tag = r.isPrimary ? " ⭐PRIMARY" : "";
+    const peak = r.eveningPeakAvgMBps != null
+      ? ` | PeakHr ${r.eveningPeakAvgMBps}MB/s${r.peakDropPct != null ? ` (${r.peakDropPct >= 0 ? "+" : ""}${r.peakDropPct}%)` : ""}`
+      : "";
+    lines.push(
+      `#${idx + 1} ${r.name}${tag} — Stability ${r.stabilityScore}/100 (${r.stabilityGrade})\n` +
+      `   Mean ${r.meanSpeedMBps} MB/s (Floor ${r.p10SpeedMBps}) | Uptime ${r.uptimePct}% (${r.runCount} runs)${peak}`
+    );
+  });
+  const text = lines.join("\n").slice(0, 4000);
   const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

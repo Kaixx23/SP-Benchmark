@@ -102,6 +102,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .toast{position:fixed;bottom:18px;right:18px;background:#1e293b;border:1px solid var(--line);color:var(--text);padding:10px 14px;border-radius:10px;font-size:13px;display:none;z-index:80}
 .toast.show{display:block}
 .muted{color:var(--dim);font-size:12px}
+.winner-box{background:linear-gradient(135deg,rgba(16,185,129,.16),rgba(37,99,235,.15));border:1px solid rgba(52,211,153,.4);border-radius:14px;padding:14px 16px;margin-bottom:16px}
+.hm-cell{text-align:center;font-size:11px;padding:6px 5px;border-radius:6px;font-weight:700;min-width:44px}
 </style>
 </head>
 <body>
@@ -116,7 +118,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="hdr-right">
       <div id="mihomoPill" class="pill warn"><span class="dot"></span><span id="mihomoText">Checking mihomo…</span></div>
       <button id="installBtn" class="btn-primary btn-sm" style="display:none" onclick="installMihomo()">⬇ Install mihomo.exe</button>
-      <button class="btn-sm" onclick="openSettings()">⚙ Settings &amp; Schedule</button>
+      <button class="btn-sm btn-primary" onclick="openStabilityReport()">📊 Daily Stability Report</button>
+      <button class="btn-sm" onclick="openSettings()">⚙ Settings &amp; Hourly Schedule</button>
     </div>
   </header>
 
@@ -170,6 +173,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="row-flex">
         <button id="runAllBtn" class="btn-green" onclick="runBenchmark(null)">🚀 Test All Airports</button>
         <button id="stopBtn" class="btn-danger" style="display:none" onclick="stopBenchmark()">⏹ Stop</button>
+        <button class="btn-sm" onclick="openStabilityReport()">📊 24h Stability Report</button>
+        <button class="btn-sm" onclick="openSettings()">⏱ Hourly Auto-Test</button>
         <button class="btn-sm" onclick="refreshState()">↻ Refresh</button>
       </div>
     </div>
@@ -228,21 +233,80 @@ tr:hover td{background:rgba(255,255,255,.02)}
   </div>
 </div>
 
+<!-- Daily Stability & Winner Report Modal -->
+<div id="reportModal" class="modal-bg" onclick="if(event.target===this)closeStabilityReport()">
+  <div class="modal" style="max-width:1240px">
+    <div class="modal-hdr" style="flex-wrap:wrap">
+      <div>
+        <strong style="font-size:16px">📊 Extensive VPN Stability &amp; Daily Winner Report</strong>
+        <div id="reportSub" class="muted">Aggregates hourly/scheduled runs to rank speed, floor resilience, evening-peak congestion &amp; uptime</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <select id="reportHours" style="width:auto;padding:5px 9px;font-size:12px" onchange="loadStabilityReport()">
+          <option value="24" selected>Window: Last 24 Hours</option>
+          <option value="72">Window: Last 3 Days (72h)</option>
+          <option value="168">Window: Last 7 Days</option>
+          <option value="0">Window: All History</option>
+        </select>
+        <button class="btn-sm" onclick="downloadReportMd()">⬇ .MD Report</button>
+        <button class="btn-sm" onclick="downloadReportCsv()">⬇ .CSV Data</button>
+        <button class="btn-sm" onclick="copyReportMd()">📋 Copy MD</button>
+        <button class="btn-sm" onclick="sendReportTelegram()">✈ Telegram</button>
+        <button class="btn-sm" onclick="closeStabilityReport()">Close</button>
+      </div>
+    </div>
+    <div class="modal-body" id="reportBody"></div>
+  </div>
+</div>
+
 <!-- Settings Modal -->
 <div id="settingsModal" class="modal-bg" onclick="if(event.target===this)closeSettings()">
-  <div class="modal" style="max-width:560px">
+  <div class="modal" style="max-width:600px">
     <div class="modal-hdr">
-      <strong>⚙ Benchmark &amp; Evening Schedule Settings</strong>
+      <strong>⚙ Hourly Auto-Test &amp; Schedule Settings</strong>
       <button class="btn-sm" onclick="closeSettings()">Close</button>
     </div>
     <div class="modal-body">
-      <label class="lbl">Daily Auto-Test Time (Local PC Time, e.g. 21:30 for evening peak — leave blank to disable)</label>
-      <input id="setSched" placeholder="21:30">
+      <div class="field-grid">
+        <div>
+          <label class="lbl">Recurring Auto-Test Interval</label>
+          <select id="setInterval">
+            <option value="0">Disabled</option>
+            <option value="30">Every 30 minutes</option>
+            <option value="60">Every 1 hour (Recommended)</option>
+            <option value="120">Every 2 hours</option>
+            <option value="240">Every 4 hours</option>
+            <option value="360">Every 6 hours</option>
+          </select>
+        </div>
+        <div>
+          <label class="lbl">Scheduled Test Depth</label>
+          <select id="setSchedMode">
+            <option value="triage">Quick Triage (Top 2/reg)</option>
+            <option value="ping">Ping + Zombie (Tiny quota)</option>
+            <option value="full">Full Audit (All nodes)</option>
+          </select>
+        </div>
+        <div>
+          <label class="lbl">Scheduled Payload / Node</label>
+          <select id="setSchedPayload">
+            <option value="10">10 MB (Low quota)</option>
+            <option value="25">25 MB (Balanced)</option>
+            <option value="50">50 MB (Heavy)</option>
+          </select>
+        </div>
+      </div>
+      <label style="display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);margin-top:9px;cursor:pointer">
+        <input type="checkbox" id="setRunNow" style="width:auto"> Start first scheduled run immediately upon saving
+      </label>
+      <div style="height:12px"></div>
+      <label class="lbl">Extra Fixed Daily Auto-Test Time (Local PC Time, e.g. 21:30 for evening peak — optional)</label>
+      <input id="setSched" placeholder="21:30 (optional)">
       <div style="height:10px"></div>
       <label class="lbl">Speed Test Payload URL</label>
       <input id="setSpeedUrl" placeholder="https://speed.cloudflare.com/__down?bytes=25000000">
       <div style="height:10px"></div>
-      <label class="lbl">Telegram Bot Token (optional — sends daily leaderboard summary)</label>
+      <label class="lbl">Telegram Bot Token (optional — sends leaderboard &amp; stability reports)</label>
       <input id="setTgToken" placeholder="123456:ABC-DEF...">
       <div style="height:10px"></div>
       <label class="lbl">Telegram Chat ID (optional)</label>
@@ -251,7 +315,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <label class="lbl">GitHub Mirror Prefix for mihomo download inside China (optional, e.g. https://ghfast.top/)</label>
       <input id="setMirror" placeholder="Leave blank for direct github.com">
       <div class="row-flex" style="margin-top:16px">
-        <button class="btn-primary" onclick="saveSettings()">Save Settings</button>
+        <button class="btn-primary" onclick="saveSettings()">Save Schedule &amp; Settings</button>
         <button onclick="testTelegram()">Test Telegram</button>
       </div>
     </div>
@@ -295,7 +359,17 @@ function renderHeader(){
     inst.style.display = "inline-block";
   }
   const st = STATE.settings || {};
-  document.getElementById("schedBadge").textContent = st.scheduleTime ? ("Auto-run daily at " + st.scheduleTime) : "Manual / Scheduled";
+  const schedParts = [];
+  if (Number(st.intervalMinutes) > 0) {
+    let nextStr = "";
+    if (STATE.nextIntervalRunAt) {
+      const minsLeft = Math.max(0, Math.round((Date.parse(STATE.nextIntervalRunAt) - Date.now()) / 60000));
+      nextStr = " · next in ~" + minsLeft + "m";
+    }
+    schedParts.push("⏱ Every " + st.intervalMinutes + "m (" + (st.scheduleMode || "triage") + " " + (st.schedulePayloadMb || 10) + "MB" + nextStr + ")");
+  }
+  if (st.scheduleTime) schedParts.push("Daily " + st.scheduleTime);
+  document.getElementById("schedBadge").textContent = schedParts.length ? schedParts.join(" + ") : "Manual (click ⏱ Hourly Auto-Test to schedule)";
   document.getElementById("runAllBtn").disabled = STATE.running || !STATE.suppliers.length;
   document.getElementById("stopBtn").style.display = STATE.running ? "inline-block" : "none";
 }
@@ -540,8 +614,175 @@ function renderDetailTable(){
   \`;
 }
 
+let LAST_REPORT_MD = "";
+
+async function openStabilityReport(){
+  document.getElementById("reportModal").classList.add("open");
+  await loadStabilityReport();
+}
+function closeStabilityReport(){ document.getElementById("reportModal").classList.remove("open"); }
+
+async function loadStabilityReport(){
+  const hours = document.getElementById("reportHours").value;
+  const body = document.getElementById("reportBody");
+  body.innerHTML = '<div class="muted" style="padding:20px;text-align:center">Calculating multi-run stability analytics…</div>';
+  try {
+    const res = await api("/api/report?hours=" + encodeURIComponent(hours));
+    LAST_REPORT_MD = res.markdown || "";
+    renderStabilityReport(res.report);
+  } catch(e){
+    body.innerHTML = '<div class="muted" style="padding:20px">Error loading report: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderStabilityReport(rep){
+  const body = document.getElementById("reportBody");
+  document.getElementById("reportSub").textContent =
+    \`Generated \${new Date(rep.generatedAt).toLocaleString()} · \${rep.totalRunsInWindow} run(s) analyzed in \${rep.windowHours > 0 ? ("last " + rep.windowHours + "h") : "all history"}\`;
+
+  const valHtml = rep.bestValue
+    ? \`<div style="margin-top:6px;font-size:12px;color:var(--blue)">💰 <b>Best Value:</b> \${esc(rep.bestValue.name)} (\${rep.bestValue.valueScoreMBpsPerUnit} MB/s per \${esc(rep.bestValue.currency)}/mo)</div>\`
+    : "";
+
+  const winnerHtml = \`
+    <div class="winner-box">
+      <div style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--green);font-weight:800;margin-bottom:4px">🏆 Overall Stability Verdict</div>
+      <div style="font-size:14px;line-height:1.5"><b>\${esc(rep.verdict)}</b></div>
+      \${valHtml}
+    </div>
+  \`;
+
+  const rowsHtml = (rep.rankings || []).map((r, i) => {
+    const prim = r.isPrimary ? ' <span class="badge b-primary">PRIMARY</span>' : "";
+    if (!r.runCount) {
+      return \`<tr><td><b>#\${i+1} \${esc(r.name)}</b>\${prim}</td><td colspan="10" class="muted">No runs recorded in this window yet</td></tr>\`;
+    }
+    let peakHtml = '<span class="muted">No 20–24h run</span>';
+    if (r.eveningPeakAvgMBps != null) {
+      let dropTag = "";
+      if (r.peakDropPct != null) {
+        const col = r.peakDropPct >= -15 ? "var(--green)" : (r.peakDropPct >= -40 ? "var(--amber)" : "var(--red)");
+        dropTag = \` <span style="color:\${col};font-weight:700">(\${r.peakDropPct>=0?"+":""}\${r.peakDropPct}%)</span>\`;
+      }
+      peakHtml = \`<b>\${r.eveningPeakAvgMBps.toFixed(1)}</b> MB/s\${dropTag}<div class="muted">Day: \${r.daytimeAvgMBps != null ? r.daytimeAvgMBps.toFixed(1) + " MB/s" : "—"}</div>\`;
+    }
+    const cvBadge = r.runCount >= 2
+      ? \`±\${r.speedStdDev.toFixed(1)} <span class="muted">(CV \${r.speedCvPct}%)</span>\`
+      : '<span class="muted">Need 2+ runs</span>';
+    const u = r.unlocks || {};
+    const unlockTxt = [
+      u.chatgpt != null ? "GPT " + u.chatgpt + "%" : null,
+      u.netflix != null ? "NF " + u.netflix + "%" : null,
+      u.youtube != null ? "YT " + u.youtube + "%" : null,
+    ].filter(Boolean).join(" · ") || '<span class="muted">—</span>';
+
+    return \`<tr>
+      <td><b>#\${i+1} \${esc(r.name)}</b>\${prim}</td>
+      <td><span class="grade g-\${r.stabilityGrade}">\${r.stabilityGrade}</span> <b style="margin-left:5px">\${r.stabilityScore}</b></td>
+      <td><b>\${r.uptimePct}%</b><div class="muted">\${r.runCount} run(s)</div></td>
+      <td><b>\${r.meanSpeedMBps.toFixed(1)} MB/s</b><div class="muted">Peak \${r.peakSpeedMBps.toFixed(1)} MB/s</div></td>
+      <td><b>\${r.p10SpeedMBps.toFixed(1)} MB/s</b><div class="muted">Min \${r.minSpeedMBps.toFixed(1)} / Max \${r.maxSpeedMBps.toFixed(1)}</div></td>
+      <td>\${peakHtml}</td>
+      <td>\${cvBadge}</td>
+      <td><b>\${r.nodeAliveRatePct}%</b>\${r.totalZombies ? \`<div><span class="badge b-bad">\${r.totalZombies} zombies</span></div>\` : ""}</td>
+      <td>\${r.meanDelayMs != null ? r.meanDelayMs + " ms" : "—"}<div class="muted">\${r.delayJitterMs ? ("±" + r.delayJitterMs + " ms") : ""}</div></td>
+      <td>\${unlockTxt}</td>
+    </tr>\`;
+  }).join("");
+
+  // 24-hour hourly speed timeline matrix
+  const slots = rep.timelineSlots || [];
+  const tested = (rep.rankings || []).filter(r => r.runCount > 0);
+  let timelineHtml = "";
+  if (tested.length && slots.length) {
+    const ths = slots.map(s => \`<th style="text-align:center;padding:6px 4px;\${s.isPeak ? "color:var(--amber)" : ""}" title="\${esc(s.key)}">\${esc(s.label.slice(0,2))}h\${s.isPeak ? "🔥" : ""}</th>\`).join("");
+    const trs = tested.map(r => {
+      const tds = (r.hourlyTimeline || []).map(c => {
+        if (c.avgMBps == null) return \`<td style="padding:4px"><div class="hm-cell" style="background:rgba(255,255,255,.03);color:var(--dim)">—</div></td>\`;
+        const bg = !c.alive
+          ? "rgba(248,113,113,.28)"
+          : c.avgMBps >= 40
+            ? "rgba(52,211,153,.28)"
+            : c.avgMBps >= 15
+              ? "rgba(96,165,250,.25)"
+              : "rgba(251,191,36,.25)";
+        return \`<td style="padding:4px" title="\${esc(c.key)} · Score \${c.score}"><div class="hm-cell" style="background:\${bg}">\${c.avgMBps.toFixed(0)}</div></td>\`;
+      }).join("");
+      return \`<tr><td><b>\${esc(r.name)}</b></td>\${tds}</tr>\`;
+    }).join("");
+    timelineHtml = \`
+      <h3 style="margin:18px 0 8px;font-size:14px">🕒 Last 24 Hours Speed Heatmap (MB/s per hour · 🔥 = 20:00–24:00 Evening Peak)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Supplier</th>\${ths}</tr></thead>
+          <tbody>\${trs}</tbody>
+        </table>
+      </div>
+    \`;
+  }
+
+  body.innerHTML = \`
+    \${winnerHtml}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Rank / VPN</th>
+            <th>Stability</th>
+            <th>Uptime</th>
+            <th>Mean Speed</th>
+            <th>Floor (P10)</th>
+            <th>Evening Peak (20–24h)</th>
+            <th>Volatility</th>
+            <th>Node Alive %</th>
+            <th>Avg Ping</th>
+            <th>Unlocks</th>
+          </tr>
+        </thead>
+        <tbody>\${rowsHtml || '<tr><td colspan="10" class="muted" style="text-align:center;padding:24px">No suppliers yet</td></tr>'}</tbody>
+      </table>
+    </div>
+    \${timelineHtml}
+  \`;
+}
+
+function downloadReportMd(){
+  const hours = document.getElementById("reportHours").value;
+  window.open("/api/report.md?hours=" + encodeURIComponent(hours), "_blank");
+}
+function downloadReportCsv(){
+  const hours = document.getElementById("reportHours").value;
+  window.open("/api/report.csv?hours=" + encodeURIComponent(hours), "_blank");
+}
+async function copyReportMd(){
+  if (!LAST_REPORT_MD) return toast("No report loaded yet");
+  try {
+    await navigator.clipboard.writeText(LAST_REPORT_MD);
+    toast("Copied Markdown report to clipboard!");
+  } catch {
+    toast("Could not copy automatically — use Download .MD Report");
+  }
+}
+async function sendReportTelegram(){
+  const hours = Number(document.getElementById("reportHours").value);
+  try {
+    await api("/api/send-report-telegram", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ hours }),
+    });
+    toast("Stability report sent to Telegram!");
+  } catch(e){
+    toast("Telegram failed: " + e.message);
+  }
+}
+
 function openSettings(){
   const st = STATE.settings || {};
+  document.getElementById("setInterval").value = String(st.intervalMinutes || 0);
+  document.getElementById("setSchedMode").value = st.scheduleMode || "triage";
+  document.getElementById("setSchedPayload").value = String(st.schedulePayloadMb || 10);
+  document.getElementById("setRunNow").checked = false;
   document.getElementById("setSched").value = st.scheduleTime || "";
   document.getElementById("setSpeedUrl").value = st.speedUrl || "";
   document.getElementById("setTgToken").value = st.telegramBotToken || "";
@@ -551,10 +792,14 @@ function openSettings(){
 function closeSettings(){ document.getElementById("settingsModal").classList.remove("open"); }
 
 async function saveSettings(){
-  await api("/api/settings", {
+  const res = await api("/api/settings", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({
+      intervalMinutes: Number(document.getElementById("setInterval").value || 0),
+      scheduleMode: document.getElementById("setSchedMode").value,
+      schedulePayloadMb: Number(document.getElementById("setSchedPayload").value || 10),
+      runImmediately: document.getElementById("setRunNow").checked,
       scheduleTime: document.getElementById("setSched").value.trim(),
       speedUrl: document.getElementById("setSpeedUrl").value.trim(),
       telegramBotToken: document.getElementById("setTgToken").value.trim(),
@@ -562,7 +807,12 @@ async function saveSettings(){
     }),
   });
   closeSettings();
-  toast("Settings saved");
+  if (res.startedImmediate) {
+    document.getElementById("progressBox").classList.add("active");
+    toast("Hourly schedule saved & first test started!");
+  } else {
+    toast("Schedule & settings saved");
+  }
   await refreshState();
 }
 

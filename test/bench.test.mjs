@@ -13,6 +13,7 @@ import {
 import { httpConnectFetch, probeNodeSpeed, probeNodeUnlocks } from "../probe.mjs";
 import { BenchStore, maskUrl } from "../store.mjs";
 import { benchmarkSupplier, pickNodesToSpeedTest } from "../runner.mjs";
+import { buildStabilityReport, formatStabilityMarkdown, formatRunsCsv } from "../report.mjs";
 import { createBenchServer, parseBulkLines } from "../server.mjs";
 
 const enc = (s) => encodeURIComponent(s);
@@ -226,9 +227,136 @@ test("benchmarkSupplier + BenchStore + createBenchServer end-to-end flow", async
 
     const hist = await fetch(base + `/api/runs/${s2.id}`).then((r) => r.json());
     assert.deepEqual(hist.runs, []);
+
+    // Save hourly interval schedule settings
+    const setRes = await fetch(base + "/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ intervalMinutes: 60, scheduleMode: "triage", schedulePayloadMb: 10 }),
+    }).then((r) => r.json());
+    assert.equal(setRes.ok, true);
+    assert.equal(setRes.intervalMinutes, 60);
+
+    // Fetch JSON, Markdown, and CSV stability report endpoints
+    const repJson = await fetch(base + "/api/report?hours=24").then((r) => r.json());
+    assert.equal(repJson.report.totalRunsInWindow, 1);
+    assert.equal(repJson.report.winner.id, s1.id);
+    assert.match(repJson.markdown, /VPN Stability & Daily Winner Report/);
+
+    const repMd = await fetch(base + "/api/report.md?hours=24").then((r) => r.text());
+    assert.match(repMd, /Executive Verdict/);
+
+    const repCsv = await fetch(base + "/api/report.csv?hours=24").then((r) => r.text());
+    assert.match(repCsv, /chuixuecloud/);
   } finally {
     stopTimer();
     server.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("buildStabilityReport ranks rock-solid VPN above volatile evening-collapse VPN and checkSchedule triggers hourly runs", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ab-sched-"));
+  const store = new BenchStore(path.join(tmpDir, "store.json"));
+
+  const steady = store.upsertSupplier({ name: "SteadyIEPL", url: "https://steady.example.com/sub", priceMonthly: 25, isPrimary: true });
+  const spiky = store.upsertSupplier({ name: "VolatileBGP", url: "https://spiky.example.com/sub", priceMonthly: 15 });
+
+  // Construct timestamps in local time on today's date at 14:00 (daytime) and 21:00 / 22:00 (evening peak)
+  const baseDay = new Date();
+  const atHour = (h) => {
+    const d = new Date(baseDay);
+    d.setHours(h, 15, 0, 0);
+    return d.toISOString();
+  };
+  const nowTime = new Date(baseDay);
+  nowTime.setHours(23, 30, 0, 0);
+
+  const mkRun = (sup, iso, avgSpd, aliveCount = 4, zombieCount = 0) => ({
+    id: Math.random().toString(16).slice(2, 10),
+    supplierId: sup.id,
+    supplierName: sup.name,
+    isPrimary: sup.isPrimary,
+    priceMonthly: sup.priceMonthly,
+    currency: "RMB",
+    startedAt: iso,
+    finishedAt: iso,
+    summary: {
+      mode: "triage",
+      totalNodes: 8,
+      pingAliveCount: 8,
+      speedTestedCount: 4,
+      aliveCount,
+      zombieCount,
+      deadCount: 4 - aliveCount,
+      avgSpeedMBps: avgSpd,
+      medianSpeedMBps: avgSpd,
+      peakSpeedMBps: avgSpd * 1.2,
+      medianDelayMs: sup.id === steady.id ? 55 : 160,
+      unlockRates: { tested: 4, chatgpt: 100, netflix: 100, youtube: 100, disney: 100 },
+      score: Math.min(100, Math.round(avgSpd + 30)),
+      grade: avgSpd >= 45 ? "S" : "C",
+    },
+  });
+
+  // SteadyIEPL: ~56 MB/s both afternoon and evening peak
+  store.addRun(mkRun(steady, atHour(13), 58));
+  store.addRun(mkRun(steady, atHour(14), 56));
+  store.addRun(mkRun(steady, atHour(21), 55));
+  store.addRun(mkRun(steady, atHour(22), 54));
+
+  // VolatileBGP: fast at 13:00-14:00 (72 MB/s), collapses at 21:00-22:00 (3 MB/s + zombies)
+  store.addRun(mkRun(spiky, atHour(13), 74, 4, 0));
+  store.addRun(mkRun(spiky, atHour(14), 70, 4, 0));
+  store.addRun(mkRun(spiky, atHour(21), 3, 1, 3));
+  store.addRun(mkRun(spiky, atHour(22), 0, 0, 4));
+
+  const report = buildStabilityReport({
+    suppliers: store.listSuppliers(),
+    runs: store.listRuns(),
+    hours: 24,
+    now: nowTime,
+  });
+
+  assert.equal(report.winner.id, steady.id);
+  const steadyRow = report.rankings.find((r) => r.id === steady.id);
+  const spikyRow = report.rankings.find((r) => r.id === spiky.id);
+  assert.ok(steadyRow.stabilityScore > spikyRow.stabilityScore);
+  assert.equal(steadyRow.uptimePct, 100);
+  assert.equal(spikyRow.uptimePct, 75);
+  assert.ok(spikyRow.peakDropPct < -80);
+
+  const md = formatStabilityMarkdown(report);
+  assert.match(md, /SteadyIEPL/);
+  assert.match(md, /VolatileBGP/);
+
+  const csv = formatRunsCsv(store.listRuns(), 24, nowTime);
+  assert.equal(csv.trim().split("\n").length, 9); // header + 8 runs
+
+  // Verify interval scheduler fires only after intervalMinutes has elapsed
+  let benchCalls = 0;
+  const { checkSchedule, stopTimer } = createBenchServer({
+    store,
+    benchFn: async (sup) => {
+      benchCalls++;
+      return mkRun(sup, new Date().toISOString(), 50);
+    },
+  });
+
+  try {
+    const t0 = new Date("2026-11-21T10:00:00.000Z");
+    store.updateSettings({ intervalMinutes: 60, lastIntervalRunAt: t0.toISOString() });
+
+    // 30 mins later -> should NOT trigger
+    assert.equal(checkSchedule(new Date("2026-11-21T10:30:00.000Z")), false);
+    assert.equal(benchCalls, 0);
+
+    // 61 mins later -> SHOULD trigger
+    assert.equal(checkSchedule(new Date("2026-11-21T11:01:00.000Z")), true);
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(benchCalls, 2); // ran for both suppliers
+  } finally {
+    stopTimer();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

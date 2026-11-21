@@ -17,8 +17,12 @@ function defaultStore() {
       speedUrl: "https://speed.cloudflare.com/__down?bytes=25000000",
       payloadMb: 25,
       cnDns: true,
-      scheduleTime: "",       // e.g. "21:30" (local PC time) for automatic evening-peak run
-      lastScheduledDate: "",  // YYYY-MM-DD
+      intervalMinutes: 0,      // e.g. 60 for automatic hourly stability testing (0 = disabled)
+      scheduleMode: "triage",  // "triage" | "ping" | "full" for scheduled runs
+      schedulePayloadMb: 10,   // lightweight default payload (MB) for scheduled/hourly runs
+      lastIntervalRunAt: "",   // ISO timestamp of last interval-triggered run
+      scheduleTime: "",        // e.g. "21:30" (local PC time) for automatic evening-peak run
+      lastScheduledDate: "",   // YYYY-MM-DD
       telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
       telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
     },
@@ -107,8 +111,15 @@ export class BenchStore {
 
   addRun(run) {
     this.state.runs.unshift(run);
-    // Keep last 200 runs so the JSON file stays fast and compact
-    if (this.state.runs.length > 200) this.state.runs = this.state.runs.slice(0, 200);
+    // Keep up to 2000 runs for multi-day hourly stability reports while trimming
+    // bulky per-node arrays on older runs (>150) so bench-store.json stays compact.
+    if (this.state.runs.length > 2000) this.state.runs = this.state.runs.slice(0, 2000);
+    for (let i = 150; i < this.state.runs.length; i++) {
+      if (this.state.runs[i].nodes) {
+        const { nodes, ...rest } = this.state.runs[i];
+        this.state.runs[i] = rest;
+      }
+    }
     this.save();
     return run;
   }

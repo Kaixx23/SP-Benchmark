@@ -7,7 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BenchStore, maskUrl } from "./store.mjs";
-import { benchmarkSupplier, sendTelegramDigest } from "./runner.mjs";
+import { benchmarkSupplier, sendTelegramDigest, sendTelegramStabilityReport } from "./runner.mjs";
+import { buildStabilityReport, formatStabilityMarkdown, formatRunsCsv } from "./report.mjs";
 import { getMihomoStatus, installMihomo } from "./setup-mihomo.mjs";
 import { renderUiHtml } from "./ui.js";
 
@@ -80,6 +81,9 @@ export function createBenchServer({ store = new BenchStore(), benchFn = benchmar
     running = true;
     activeController = new AbortController();
     const st = store.getSettings();
+    if (!supplierId && Number(st.intervalMinutes) > 0) {
+      store.updateSettings({ lastIntervalRunAt: new Date().toISOString() });
+    }
     const completedRuns = [];
     let runError = null;
 
@@ -156,16 +160,90 @@ export function createBenchServer({ store = new BenchStore(), benchFn = benchmar
         }));
         const latestRuns = store.latestRunBySupplier();
         const st = store.getSettings();
+        let nextIntervalRunAt = null;
+        if (Number(st.intervalMinutes) > 0) {
+          const baseMs = st.lastIntervalRunAt ? Date.parse(st.lastIntervalRunAt) : Date.now();
+          if (!Number.isNaN(baseMs)) {
+            nextIntervalRunAt = new Date(baseMs + Number(st.intervalMinutes) * 60 * 1000).toISOString();
+          }
+        }
         sendJson(res, 200, {
           suppliers,
           latestRuns,
+          totalRunsCount: store.listRuns().length,
           running,
+          nextIntervalRunAt,
           mihomo: getMihomoStatus(),
           settings: {
             ...st,
             telegramBotToken: st.telegramBotToken ? "••••" + st.telegramBotToken.slice(-6) : "",
           },
         });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/report") {
+        const hours = Number(u.searchParams.get("hours") ?? 24);
+        const report = buildStabilityReport({
+          suppliers: store.listSuppliers(),
+          runs: store.listRuns(),
+          hours: Number.isNaN(hours) ? 24 : hours,
+        });
+        sendJson(res, 200, {
+          report,
+          markdown: formatStabilityMarkdown(report),
+        });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/report.md") {
+        const hours = Number(u.searchParams.get("hours") ?? 24);
+        const report = buildStabilityReport({
+          suppliers: store.listSuppliers(),
+          runs: store.listRuns(),
+          hours: Number.isNaN(hours) ? 24 : hours,
+        });
+        const md = formatStabilityMarkdown(report);
+        const dateTag = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          "Content-Type": "text/markdown; charset=utf-8",
+          "Content-Disposition": `attachment; filename="vpn-stability-report-${dateTag}.md"`,
+        });
+        res.end(md);
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/report.csv") {
+        const hours = Number(u.searchParams.get("hours") ?? 24);
+        const csv = formatRunsCsv(store.listRuns(), Number.isNaN(hours) ? 24 : hours);
+        const dateTag = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="vpn-runs-${dateTag}.csv"`,
+        });
+        res.end(csv);
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/send-report-telegram") {
+        const body = await readJsonBody(req);
+        const st = store.getSettings();
+        if (!st.telegramBotToken || !st.telegramChatId) {
+          return sendJson(res, 400, { error: "Set Telegram Bot Token and Chat ID in Settings first" });
+        }
+        const hours = Number(body.hours ?? 24);
+        const report = buildStabilityReport({
+          suppliers: store.listSuppliers(),
+          runs: store.listRuns(),
+          hours: Number.isNaN(hours) ? 24 : hours,
+        });
+        const r = await sendTelegramStabilityReport({
+          botToken: st.telegramBotToken,
+          chatId: st.telegramChatId,
+          report,
+        });
+        if (!r.sent) return sendJson(res, 502, { error: `Telegram returned HTTP ${r.status}` });
+        sendJson(res, 200, { sent: true });
         return;
       }
 
@@ -233,6 +311,20 @@ export function createBenchServer({ store = new BenchStore(), benchFn = benchmar
         const cur = store.getSettings();
         const patch = {};
         if (body.scheduleTime !== undefined) patch.scheduleTime = String(body.scheduleTime).trim();
+        if (body.intervalMinutes !== undefined) {
+          const iv = Math.max(0, Math.round(Number(body.intervalMinutes) || 0));
+          patch.intervalMinutes = iv;
+          if (iv > 0 && !cur.lastIntervalRunAt && !body.runImmediately) {
+            patch.lastIntervalRunAt = new Date().toISOString();
+          }
+        }
+        if (body.scheduleMode !== undefined && ["triage", "ping", "full"].includes(body.scheduleMode)) {
+          patch.scheduleMode = body.scheduleMode;
+        }
+        if (body.schedulePayloadMb !== undefined) {
+          const pmb = Number(body.schedulePayloadMb);
+          if (pmb > 0 && pmb <= 200) patch.schedulePayloadMb = pmb;
+        }
         if (body.speedUrl !== undefined && body.speedUrl.trim()) patch.speedUrl = body.speedUrl.trim();
         if (body.telegramChatId !== undefined) patch.telegramChatId = String(body.telegramChatId).trim();
         if (body.telegramBotToken !== undefined && !String(body.telegramBotToken).startsWith("••••")) {
@@ -241,7 +333,21 @@ export function createBenchServer({ store = new BenchStore(), benchFn = benchmar
           patch.telegramBotToken = cur.telegramBotToken;
         }
         const updated = store.updateSettings(patch);
-        sendJson(res, 200, { ok: true, scheduleTime: updated.scheduleTime });
+        let startedImmediate = false;
+        if (body.runImmediately && updated.intervalMinutes > 0 && !running && store.listSuppliers().length > 0) {
+          await startRun({
+            mode: updated.scheduleMode || "triage",
+            payloadMb: updated.schedulePayloadMb || 10,
+            cnDns: updated.cnDns !== false,
+          }).catch(() => {});
+          startedImmediate = true;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          scheduleTime: updated.scheduleTime,
+          intervalMinutes: updated.intervalMinutes,
+          startedImmediate,
+        });
         return;
       }
 
@@ -266,21 +372,43 @@ export function createBenchServer({ store = new BenchStore(), benchFn = benchmar
     }
   });
 
-  // Daily scheduler loop (checks every 30s if local HH:MM matches scheduleTime)
-  const schedTimer = setInterval(() => {
+  // Periodic scheduler: supports both recurring interval runs (e.g. every 60 min)
+  // and daily fixed-time runs (e.g. "21:30" local PC time).
+  function checkSchedule(now = new Date()) {
+    if (running || store.listSuppliers().length === 0) return false;
     const st = store.getSettings();
-    if (!st.scheduleTime || running) return;
-    const now = new Date();
-    const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    if (hhmm === st.scheduleTime && st.lastScheduledDate !== today && store.listSuppliers().length > 0) {
-      store.updateSettings({ lastScheduledDate: today });
-      startRun({ mode: "triage", payloadMb: st.payloadMb || 25, cnDns: st.cnDns !== false }).catch(() => {});
+    const schedMode = st.scheduleMode || "triage";
+    const schedPayload = Number(st.schedulePayloadMb || 10);
+
+    // 1) Recurring interval scheduler (hourly / N-minute stability sampling)
+    const ivMin = Number(st.intervalMinutes || 0);
+    if (ivMin > 0) {
+      const lastMs = st.lastIntervalRunAt ? Date.parse(st.lastIntervalRunAt) : 0;
+      const due = !lastMs || Number.isNaN(lastMs) || (now.getTime() - lastMs >= ivMin * 60 * 1000);
+      if (due) {
+        store.updateSettings({ lastIntervalRunAt: now.toISOString() });
+        startRun({ mode: schedMode, payloadMb: schedPayload, cnDns: st.cnDns !== false }).catch(() => {});
+        return true;
+      }
     }
-  }, 30000);
+
+    // 2) Daily fixed-time scheduler (e.g. 21:30 evening peak)
+    if (st.scheduleTime) {
+      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      if (hhmm === st.scheduleTime && st.lastScheduledDate !== today) {
+        store.updateSettings({ lastScheduledDate: today });
+        startRun({ mode: schedMode, payloadMb: schedPayload, cnDns: st.cnDns !== false }).catch(() => {});
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const schedTimer = setInterval(() => checkSchedule(new Date()), 20000);
   schedTimer.unref();
 
-  return { server, startRun, stopTimer: () => clearInterval(schedTimer) };
+  return { server, startRun, checkSchedule, stopTimer: () => clearInterval(schedTimer) };
 }
 
 function lanAddresses() {
