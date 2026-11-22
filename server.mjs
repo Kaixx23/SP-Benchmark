@@ -10,6 +10,8 @@ import { BenchStore, maskUrl } from "./store.mjs";
 import { benchmarkSupplier, sendTelegramDigest } from "./runner.mjs";
 import { getMihomoStatus, installMihomo } from "./setup-mihomo.mjs";
 import { renderUiHtml } from "./ui.js";
+import { renderReportHtml } from "./report-ui.js";
+import { buildDeepReport } from "./analysis.mjs";
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -129,6 +131,17 @@ export function createBenchServer({ store = new BenchStore(), benchFn = benchmar
       if (req.method === "GET" && pathname === "/") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(renderUiHtml());
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/report") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderReportHtml());
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/report") {
+        sendJson(res, 200, buildDeepReport(store.listRuns(), store.listSuppliers()));
         return;
       }
 

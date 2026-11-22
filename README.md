@@ -33,6 +33,21 @@ Zero external npm dependencies (pure Node.js >= 20). Ready to move into its own 
 
 ---
 
+## 📊 Deep Analysis Report (for resale decisions)
+
+Open **`http://127.0.0.1:8788/report`** (or click **📊 Deep Report** in the header). It analyzes your **entire run history** (up to 500 runs) and answers:
+
+- **⏰ When does each airport perform?** Per time band (Morning 06–12 / Afternoon 12–18 / **Evening Peak 18–23** / Late Night 23–06) plus a 24-hour speed heatmap — catches airports that fly at 3 AM but collapse at 21:00.
+- **🌍 Which countries work best?** Region × supplier speed matrix with a 👑 winner per region, plus a Region × Time-of-Day matrix showing the ⭐ best window per country.
+- **🏆 Who should I resell?** Every supplier gets a reseller-weighted score (evening-peak speed 30 · reliability & consistency 25 · AI/streaming unlocks 15 · latency 10 · entry diversity 10 · value-for-money 10) with a verdict (**Resell-ready / Strong candidate / Backup only / Avoid**), concrete strengths, and risk flags (evening collapse, zombie %, single-entry IP, run-to-run instability, dead regions, low quota).
+- **Confidence banner** tells you when you *don't* have enough data yet (e.g., no evening runs) so you don't commit money on one lucky daytime test.
+
+> For a trustworthy verdict: add all candidate links, set the daily auto-run to **21:30**, and collect **3+ days** across **3+ time bands** before deciding.
+
+Preview it without burning quota: `node demo-seed.mjs` writes synthetic demo history into `data/` (refuses to overwrite real data unless `--force`).
+
+---
+
 ## Moving Into a New Standalone GitHub Repo
 
 Everything inside `airport-bench/` is completely self-contained. To make it its own repository:
