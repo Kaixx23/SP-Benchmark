@@ -107,8 +107,10 @@ export class BenchStore {
 
   addRun(run) {
     this.state.runs.unshift(run);
-    // Keep last 200 runs so the JSON file stays fast and compact
-    if (this.state.runs.length > 200) this.state.runs = this.state.runs.slice(0, 200);
+    // Keep last 500 runs so the Deep Analysis Report has enough time-of-day
+    // history (several weeks of multi-supplier daily runs) while the JSON
+    // file stays fast and compact.
+    if (this.state.runs.length > 500) this.state.runs = this.state.runs.slice(0, 500);
     this.save();
     return run;
   }

@@ -116,6 +116,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="hdr-right">
       <div id="mihomoPill" class="pill warn"><span class="dot"></span><span id="mihomoText">Checking mihomo…</span></div>
       <button id="installBtn" class="btn-primary btn-sm" style="display:none" onclick="installMihomo()">⬇ Install mihomo.exe</button>
+      <a class="btn btn-sm" href="/report" style="text-decoration:none;display:inline-flex;align-items:center">📊 Deep Report</a>
       <button class="btn-sm" onclick="openSettings()">⚙ Settings &amp; Schedule</button>
     </div>
   </header>
