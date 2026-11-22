@@ -1,6 +1,6 @@
 {
   "name": "airport-bench",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Local Windows/Mac/Linux web app to benchmark and compare multiple VPN airport subscriptions side-by-side using mihomo.",
